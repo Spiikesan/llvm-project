@@ -40,7 +40,7 @@ void JSONNodeDumper::Visit(const Attr *A) {
   // the actual spelling. This would allow us to distinguish between the
   // various attribute syntaxes, but we don't currently track that information
   // within the AST.
-  //JOS.attribute("spelling", A->getSpelling());
+  // JOS.attribute("spelling", A->getSpelling());
 
   InnerAttrVisitor::Visit(A);
 }
@@ -348,12 +348,28 @@ llvm::json::Object JSONNodeDumper::createQualType(QualType QT, bool Desugar) {
   std::string SQTS = QualType::getAsString(SQT, PrintPolicy);
   llvm::json::Object Ret{{"qualType", SQTS}};
 
-  if (Desugar && !QT.isNull()) {
-    SplitQualType DSQT = QT.getSplitDesugaredType();
-    if (DSQT != SQT) {
-      std::string DSQTS = QualType::getAsString(DSQT, PrintPolicy);
-      if (DSQTS != SQTS)
-        Ret["desugaredQualType"] = DSQTS;
+  if (!QT.isNull()) {
+    if (const Type *T = SQT.Ty->getBaseElementTypeUnsafe()) {
+      Ret["typeId"] = createPointerRepresentation(T);
+
+      if (const TagDecl *TG = T->getAsTagDecl()) {
+        if (const TagDecl *TGD = TG->getDefinition())
+          Ret["declId"] = TGD->getID();
+      }
+    }
+
+    QT.getQualifiers();
+
+    if (!SQT.Quals.empty())
+      Ret["qualifiers"] = SQT.Quals.getAsString();
+
+    if (Desugar) {
+      SplitQualType DSQT = QT.getSplitDesugaredType();
+      if (DSQT != SQT) {
+        std::string DSQTS = QualType::getAsString(DSQT, PrintPolicy);
+        if (DSQTS != SQTS)
+          Ret["desugaredQualType"] = DSQTS;
+      }
     }
     if (const auto *TT = QT->getAs<TypedefType>())
       Ret["typeAliasDeclId"] = createPointerRepresentation(TT->getDecl());
@@ -670,7 +686,7 @@ void JSONNodeDumper::VisitFunctionProtoType(const FunctionProtoType *T) {
   case EST_NoexceptFalse:
     JOS.attribute("exceptionSpec", "noexcept");
     JOS.attribute("conditionEvaluatesTo",
-                E.ExceptionSpec.Type == EST_NoexceptTrue);
+                  E.ExceptionSpec.Type == EST_NoexceptTrue);
     //JOS.attributeWithCall("exceptionSpecExpr",
     //                    [this, E]() { Visit(E.ExceptionSpec.NoexceptExpr); });
     break;
@@ -857,32 +873,37 @@ void JSONNodeDumper::VisitMemberPointerType(const MemberPointerType *MPT) {
 }
 
 void JSONNodeDumper::VisitNamedDecl(const NamedDecl *ND) {
-  if (ND && ND->getDeclName()) {
-    JOS.attribute("name", ND->getNameAsString());
-    // FIXME: There are likely other contexts in which it makes no sense to ask
-    // for a mangled name.
-    if (isa<RequiresExprBodyDecl>(ND->getDeclContext()))
-      return;
+  if (ND) {
+    JOS.attribute("declId", ND->getID());
 
-    // If the declaration is dependent or is in a dependent context, then the
-    // mangling is unlikely to be meaningful (and in some cases may cause
-    // "don't know how to mangle this" assertion failures.
-    if (ND->isTemplated())
-      return;
+    if (ND->getDeclName()) {
+      JOS.attribute("name", ND->getNameAsString());
 
-    // Mangled names are not meaningful for locals, and may not be well-defined
-    // in the case of VLAs.
-    auto *VD = dyn_cast<VarDecl>(ND);
-    if (VD && VD->hasLocalStorage())
-      return;
+      // FIXME: There are likely other contexts in which it makes no sense to ask
+      // for a mangled name.
+      if (isa<RequiresExprBodyDecl>(ND->getDeclContext()))
+        return;
 
-    // Do not mangle template deduction guides.
-    if (isa<CXXDeductionGuideDecl>(ND))
-      return;
+      // If the declaration is dependent or is in a dependent context, then the
+      // mangling is unlikely to be meaningful (and in some cases may cause
+      // "don't know how to mangle this" assertion failures.
+      if (ND->isTemplated())
+        return;
 
-    std::string MangledName = ASTNameGen.getName(ND);
-    if (!MangledName.empty())
-      JOS.attribute("mangledName", MangledName);
+      // Mangled names are not meaningful for locals, and may not be well-defined
+      // in the case of VLAs.
+      auto *VD = dyn_cast<VarDecl>(ND);
+      if (VD && VD->hasLocalStorage())
+        return;
+
+      // Do not mangle template deduction guides.
+      if (isa<CXXDeductionGuideDecl>(ND))
+        return;
+
+      std::string MangledName = ASTNameGen.getName(ND);
+      if (!MangledName.empty())
+        JOS.attribute("mangledName", MangledName);
+    }
   }
 }
 
